@@ -23,7 +23,7 @@ const EZIPAY_BASE_URL = 'https://ezipaywallet.com/merchant/api/';
 async function getEziPayToken() {
   try {
     const response = await axios.post(
-      `${EZIPAY_BASE_URL}/oauth/token`,
+      `${EZIPAY_BASE_URL}/access-token`,
       {
         grant_type: 'client_credentials',
         client_id: EZIPAY_CLIENT_ID,
