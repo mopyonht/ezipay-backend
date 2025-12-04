@@ -50,15 +50,15 @@ app.post('/api/create-deposit', async (req, res) => {
         amount: amount,
         currency: currency || 'USD',
         description: `Dépôt wallet ${userId}`,
-        return_url: `${process.env.FRONTEND_URL}/wallet.html?deposit=success`,
-        cancel_url: `${process.env.FRONTEND_URL}/wallet.html?deposit=cancel`
+        return_url: `${process.env.FRONTEND_URL}/ezipay-paiement.html?deposit=success`,
+        cancel_url: `${process.env.FRONTEND_URL}/ezipay-paiement.html?deposit=cancel`
       },
       {
         headers: { Authorization: `Bearer ${token}` }
       }
     );
 
-    const fees = amount * 0.02;
+    const fees = amount * 0.06;
     const creditAmount = amount - fees;
 
     // Sauvegarder en attente
