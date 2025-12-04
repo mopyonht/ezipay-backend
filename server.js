@@ -25,14 +25,13 @@ async function getEziPayToken() {
     const response = await axios.post(
       `${EZIPAY_BASE_URL}/access-token`,
       {
-        grant_type: 'client_credentials',
         client_id: EZIPAY_CLIENT_ID,
         client_secret: EZIPAY_CLIENT_SECRET
       }
     );
-    return response.data.data.access_token;  // ✅ BON
+    return response.data.data.access_token;
   } catch (error) {
-    console.error('❌ Erreur token:', error.message);
+    console.error('❌ Erreur token:', error.response?.data || error.message);
     throw new Error('Erreur authentification EziPay');
   }
 }
@@ -45,13 +44,13 @@ app.post('/api/create-deposit', async (req, res) => {
     const token = await getEziPayToken();
 
     const response = await axios.post(
-      `${EZIPAY_BASE_URL}/payment/create`,
+      `${EZIPAY_BASE_URL}/transaction/create`,
       {
-        amount: amount,
+        amount: Math.round(amount * 100) / 100,
         currency: currency || 'USD',
-        description: `Dépôt wallet ${userId}`,
-        return_url: `${process.env.FRONTEND_URL}/ezipay-paiement.html?deposit=success`,
-        cancel_url: `${process.env.FRONTEND_URL}/ezipay-paiement.html?deposit=cancel`
+        successUrl: `${process.env.FRONTEND_URL}/ezipay-paiement.html?deposit=success`,
+        cancelUrl: `${process.env.FRONTEND_URL}/ezipay-paiement.html?deposit=cancel`,
+        metadata: `Dépôt wallet ${userId}`
       },
       {
         headers: { Authorization: `Bearer ${token}` }
@@ -67,7 +66,7 @@ app.post('/api/create-deposit', async (req, res) => {
       .doc(userId)
       .collection('pending_deposits')
       .add({
-        transactionId: response.data.transaction_id,
+        grantId: response.data.data.grant_id,
         amount: amount,
         creditAmount: creditAmount,
         fees: fees,
@@ -77,33 +76,34 @@ app.post('/api/create-deposit', async (req, res) => {
 
     res.json({
       success: true,
-      payment_url: response.data.payment_link,
-      transactionId: response.data.transaction_id,
+      payment_url: response.data.data.payment_url,
+      grant_id: response.data.data.grant_id,
       expectedCredit: creditAmount
     });
   } catch (error) {
+    console.error('❌ Erreur create-deposit:', error.response?.data || error.message);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.response?.data?.message || error.message
     });
   }
 });
 
 // ===== VÉRIFIER DÉPÔT =====
-app.post('/verify-deposit', async (req, res) => {
-  const { transactionId, userId } = req.body;
+app.post('/api/verify-deposit', async (req, res) => {
+  const { grantId, userId } = req.body;
 
   try {
     const token = await getEziPayToken();
 
     const response = await axios.get(
-      `${EZIPAY_BASE_URL}/payment/status/${transactionId}`,
+      `${EZIPAY_BASE_URL}/transaction/get/${grantId}`,
       {
         headers: { Authorization: `Bearer ${token}` }
       }
     );
 
-    if (response.data.status !== 'completed') {
+    if (response.data.data.status !== 'Success') {
       return res.json({ success: false, error: 'Paiement non confirmé' });
     }
 
@@ -112,7 +112,7 @@ app.post('/verify-deposit', async (req, res) => {
       .collection('users')
       .doc(userId)
       .collection('pending_deposits')
-      .where('transactionId', '==', transactionId)
+      .where('grantId', '==', grantId)
       .get();
 
     if (deposits.empty) {
@@ -137,6 +137,7 @@ app.post('/verify-deposit', async (req, res) => {
       creditAmount: creditAmount,
       fees: deposit.fees,
       status: 'completed',
+      grantId: grantId,
       date: admin.firestore.FieldValue.serverTimestamp()
     });
 
@@ -156,15 +157,16 @@ app.post('/verify-deposit', async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('❌ Erreur verify-deposit:', error.response?.data || error.message);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.response?.data?.message || error.message
     });
   }
 });
 
 // ===== CRÉER RETRAIT =====
-app.post('/create-withdrawal', async (req, res) => {
+app.post('/api/create-withdrawal', async (req, res) => {
   const { userId, amount, currency, emailOrPhone, paymentMethodId } = req.body;
 
   try {
@@ -180,15 +182,14 @@ app.post('/create-withdrawal', async (req, res) => {
       return res.json({ success: false, error: 'Solde insuffisant' });
     }
 
-    // Créer payout
+    // Créer send-money
     const response = await axios.post(
-      `${EZIPAY_BASE_URL}/payout/create`,
+      `${EZIPAY_BASE_URL}/send-money/create`,
       {
-        amount: amount,
+        email_or_phone: emailOrPhone,
         currency: currency || 'USD',
-        email: emailOrPhone,
-        payment_method_id: paymentMethodId,
-        description: `Retrait wallet ${userId}`
+        amount: Math.round(amount * 100) / 100,
+        payment_method_id: parseInt(paymentMethodId)
       },
       {
         headers: { Authorization: `Bearer ${token}` }
@@ -208,13 +209,13 @@ app.post('/create-withdrawal', async (req, res) => {
       fees: fees,
       totalDebit: totalDebit,
       status: 'processing',
-      transactionId: response.data.transaction_id,
+      emailOrPhone: emailOrPhone,
+      paymentMethod: paymentMethodId === '1' ? 'EziPay' : 'MonCash',
       date: admin.firestore.FieldValue.serverTimestamp()
     });
 
     res.json({
       success: true,
-      transactionId: response.data.transaction_id,
       totalDebit: totalDebit,
       newBalance: newBalance,
       transaction: {
@@ -226,9 +227,10 @@ app.post('/create-withdrawal', async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('❌ Erreur create-withdrawal:', error.response?.data || error.message);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.response?.data?.message || error.message
     });
   }
 });
