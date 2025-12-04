@@ -45,7 +45,7 @@ app.post('/api/create-deposit', async (req, res) => {
     const token = await getEziPayToken();
 
     const response = await axios.post(
-      `${EZIPAY_BASE_URL}/api/payment/create`,
+      `${EZIPAY_BASE_URL}/payment/create`,
       {
         amount: amount,
         currency: currency || 'USD',
@@ -90,14 +90,14 @@ app.post('/api/create-deposit', async (req, res) => {
 });
 
 // ===== VÉRIFIER DÉPÔT =====
-app.post('/api/verify-deposit', async (req, res) => {
+app.post('/verify-deposit', async (req, res) => {
   const { transactionId, userId } = req.body;
 
   try {
     const token = await getEziPayToken();
 
     const response = await axios.get(
-      `${EZIPAY_BASE_URL}/api/payment/status/${transactionId}`,
+      `${EZIPAY_BASE_URL}/payment/status/${transactionId}`,
       {
         headers: { Authorization: `Bearer ${token}` }
       }
@@ -164,7 +164,7 @@ app.post('/api/verify-deposit', async (req, res) => {
 });
 
 // ===== CRÉER RETRAIT =====
-app.post('/api/create-withdrawal', async (req, res) => {
+app.post('/create-withdrawal', async (req, res) => {
   const { userId, amount, currency, emailOrPhone, paymentMethodId } = req.body;
 
   try {
@@ -182,7 +182,7 @@ app.post('/api/create-withdrawal', async (req, res) => {
 
     // Créer payout
     const response = await axios.post(
-      `${EZIPAY_BASE_URL}/api/payout/create`,
+      `${EZIPAY_BASE_URL}/payout/create`,
       {
         amount: amount,
         currency: currency || 'USD',
