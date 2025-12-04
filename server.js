@@ -17,7 +17,7 @@ const db = admin.firestore();
 // ===== VARIABLES =====
 const EZIPAY_CLIENT_ID = process.env.EZIPAY_CLIENT_ID;
 const EZIPAY_CLIENT_SECRET = process.env.EZIPAY_CLIENT_SECRET;
-const EZIPAY_BASE_URL = 'https://ezipaywallet.com/merchant/api/';
+const EZIPAY_BASE_URL = 'https://ezipaywallet.com/merchant/api';
 
 // ===== OBTENIR ACCESS TOKEN =====
 async function getEziPayToken() {
@@ -30,7 +30,7 @@ async function getEziPayToken() {
         client_secret: EZIPAY_CLIENT_SECRET
       }
     );
-    return response.data.access_token;
+    return response.data.data.access_token;  // ✅ BON
   } catch (error) {
     console.error('❌ Erreur token:', error.message);
     throw new Error('Erreur authentification EziPay');
