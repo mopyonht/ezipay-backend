@@ -91,26 +91,39 @@ app.post('/api/create-deposit', async (req, res) => {
 
 // ===== VÉRIFIER DÉPÔT =====
 app.post('/api/verify-deposit', async (req, res) => {
-  const { transactionId, userId } = req.body;
+  const { grantId, userId } = req.body;
 
   try {
     const token = await getEziPayToken();
 
-    // Vérifier avec transaction_id (PAS grant_id)
     const response = await axios.get(
-      `${EZIPAY_BASE_URL}/transaction/get/${transactionId}`,
-      { headers: { Authorization: `Bearer ${token}` } }
+      `${EZIPAY_BASE_URL}/transaction/get/${grantId}`,
+      {
+        headers: { Authorization: `Bearer ${token}` }
+      }
     );
 
     if (response.data.data.status !== 'Success') {
       return res.json({ success: false, error: 'Paiement non confirmé' });
     }
 
-    const amount = parseFloat(response.data.data.amount);
-    const fees = amount * 0.06;
-    const creditAmount = amount - fees;
+    // Récupérer le dépôt en attente
+    const deposits = await db
+      .collection('users')
+      .doc(userId)
+      .collection('pending_deposits')
+      .where('grantId', '==', grantId)
+      .get();
 
-    // Créditer
+    if (deposits.empty) {
+      return res.json({ success: false, error: 'Transaction non trouvée' });
+    }
+
+    const depositDoc = deposits.docs[0];
+    const deposit = depositDoc.data();
+    const creditAmount = deposit.creditAmount;
+
+    // Créditer l'utilisateur
     const userRef = db.collection('users').doc(userId);
     const userDoc = await userRef.get();
     const newBalance = (userDoc.data()?.balance || 0) + creditAmount;
@@ -120,24 +133,14 @@ app.post('/api/verify-deposit', async (req, res) => {
     // Enregistrer transaction
     await userRef.collection('transactions').add({
       type: 'deposit',
-      amount: amount,
+      amount: deposit.amount,
       creditAmount: creditAmount,
-      fees: fees,
+      fees: deposit.fees,
       status: 'completed',
-      transactionId: transactionId,
+      grantId: grantId,
       date: admin.firestore.FieldValue.serverTimestamp()
     });
 
-    res.json({
-      success: true,
-      creditAmount: creditAmount,
-      newBalance: newBalance
-    });
-  } catch (error) {
-    console.error('❌ verify-deposit:', error.response?.data || error.message);
-    res.json({ success: false, error: error.message });
-  }
-});
     // Marquer comme complétée
     await depositDoc.ref.update({ status: 'completed' });
 
@@ -241,3 +244,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Serveur sur port ${PORT}`);
 });
+    
