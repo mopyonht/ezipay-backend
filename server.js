@@ -48,14 +48,16 @@ app.post('/api/create-deposit', async (req, res) => {
       {
         amount: Math.round(amount * 100) / 100,
         currency: currency || 'USD',
-        successUrl: `${process.env.FRONTEND_URL}/ezipay-paiement.html?deposit=success`,
-        cancelUrl: `${process.env.FRONTEND_URL}/ezipay-paiement.html?deposit=cancel`,
+        successUrl: `https://chanpyon509.com/ezipay-paiement.html?deposit=success`,
+        cancelUrl: `https://chanpyon509.com/ezipay-paiement.html?deposit=cancel`,
         metadata: `Dépôt wallet ${userId}`
       },
       {
         headers: { Authorization: `Bearer ${token}` }
       }
     );
+    console.log('📥 RÉPONSE EZIPAY:', JSON.stringify(response.data));
+    console.log('🔗 PAYMENT_URL:', response.data.data.payment_url);
 
     const fees = amount * 0.06;
     const creditAmount = amount - fees;
