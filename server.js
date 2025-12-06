@@ -1,45 +1,62 @@
-// ============================================
-// SERVER.JS - Version ultra-simple
-// ============================================
-
 import express from 'express';
 import cors from 'cors';
 import axios from 'axios';
 import admin from 'firebase-admin';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 
-// Firebase
+// ===== SERVIR FICHIERS STATIQUES =====
+app.use(express.static(__dirname));
+
+// ===== FIREBASE =====
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
 admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
 
-// Config EziPay
+// ===== CONFIG EZIPAY =====
 const EZIPAY_CLIENT_ID = process.env.EZIPAY_CLIENT_ID;
 const EZIPAY_CLIENT_SECRET = process.env.EZIPAY_CLIENT_SECRET;
 const EZIPAY_BASE_URL = 'https://ezipaywallet.com/merchant/api';
-const FRONTEND_URL = 'https://chanpyon509.com';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
 
-// ===== OBTENIR TOKEN =====
+// ===== OBTENIR TOKEN EZIPAY =====
 async function getEziPayToken() {
-  const response = await axios.post(`${EZIPAY_BASE_URL}/access-token`, {
-    client_id: EZIPAY_CLIENT_ID,
-    client_secret: EZIPAY_CLIENT_SECRET
-  });
-  return response.data.data.access_token;
+  try {
+    const response = await axios.post(`${EZIPAY_BASE_URL}/access-token`, {
+      client_id: EZIPAY_CLIENT_ID,
+      client_secret: EZIPAY_CLIENT_SECRET
+    });
+    return response.data.data.access_token;
+  } catch (error) {
+    console.error('❌ Erreur getEziPayToken:', error.response?.data || error.message);
+    throw new Error('Impossible d’obtenir le token EziPay');
+  }
 }
 
-// ===== CRÉER DÉPÔT =====
+// ===== ROUTES =====
+
+// SERVIR EZIPAY-PAIEMENT.HTML
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'ezipay-paiement.html'));
+});
+
+// CREATE DEPOSIT
 app.post('/api/create-deposit', async (req, res) => {
   const { userId, amount, currency } = req.body;
-  
-  console.log('📥 CREATE DEPOSIT:', { userId, amount, currency });
+
+  if (!userId || !amount || parseFloat(amount) <= 0) {
+    return res.status(400).json({ success: false, error: 'Paramètres invalides' });
+  }
 
   try {
     const token = await getEziPayToken();
-    console.log('✅ Token obtenu');
 
     const ezipayResponse = await axios.post(
       `${EZIPAY_BASE_URL}/transaction/create`,
@@ -53,9 +70,6 @@ app.post('/api/create-deposit', async (req, res) => {
       { headers: { Authorization: `Bearer ${token}` } }
     );
 
-    console.log('✅ Transaction créée:', ezipayResponse.data.data.grant_id);
-    console.log('🔗 Payment URL:', ezipayResponse.data.data.payment_url);
-
     const fees = parseFloat(amount) * 0.06;
     const creditAmount = parseFloat(amount) - fees;
 
@@ -65,29 +79,29 @@ app.post('/api/create-deposit', async (req, res) => {
       expectedCredit: creditAmount
     });
   } catch (error) {
-    console.error('❌ Erreur create-deposit:', error.response?.data || error.message);
+    console.error('❌ create-deposit error:', error.response?.data || error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// ===== VÉRIFIER DÉPÔT =====
+// VERIFY DEPOSIT
 app.post('/api/verify-deposit', async (req, res) => {
   const { transactionId, userId } = req.body;
-  
-  console.log('🔍 VERIFY DEPOSIT:', { transactionId, userId });
+
+  if (!transactionId || !userId) {
+    return res.status(400).json({ success: false, error: 'Paramètres invalides' });
+  }
 
   try {
     const token = await getEziPayToken();
-    
+
     const ezipayResponse = await axios.get(
       `${EZIPAY_BASE_URL}/transaction/get/${transactionId}`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
 
-    console.log('📦 Réponse EziPay:', ezipayResponse.data);
-
-    if (ezipayResponse.data.data.status !== 'Success') {
-      console.log('❌ Statut pas Success:', ezipayResponse.data.data.status);
+    const status = ezipayResponse.data.data.status;
+    if (status !== 'Success') {
       return res.json({ success: false, error: 'Paiement non confirmé' });
     }
 
@@ -95,54 +109,45 @@ app.post('/api/verify-deposit', async (req, res) => {
     const fees = amount * 0.06;
     const creditAmount = amount - fees;
 
-    console.log('💰 Montants:', { amount, fees, creditAmount });
-
     // Mettre à jour Firebase
     const userRef = db.collection('users').doc(userId);
     const userDoc = await userRef.get();
     const currentBalance = userDoc.data()?.balance || 0;
     const newBalance = currentBalance + creditAmount;
 
-    console.log('💾 Update Firebase:', { currentBalance, newBalance });
-
     await userRef.set({ balance: newBalance }, { merge: true });
-
     await userRef.collection('transactions').add({
       type: 'deposit',
-      amount: amount,
-      creditAmount: creditAmount,
-      fees: fees,
+      amount,
+      creditAmount,
+      fees,
       status: 'completed',
-      transactionId: transactionId,
+      transactionId,
       date: admin.firestore.FieldValue.serverTimestamp()
     });
 
-    console.log('✅ Tout mis à jour avec succès');
-
-    res.json({
-      success: true,
-      creditAmount: creditAmount,
-      newBalance: newBalance
-    });
+    res.json({ success: true, creditAmount, newBalance });
   } catch (error) {
-    console.error('❌ Erreur verify-deposit:', error.response?.data || error.message);
+    console.error('❌ verify-deposit error:', error.response?.data || error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// ===== CRÉER RETRAIT =====
+// CREATE WITHDRAWAL
 app.post('/api/create-withdrawal', async (req, res) => {
   const { userId, amount, currency, emailOrPhone, paymentMethodId } = req.body;
 
-  console.log('💸 CREATE WITHDRAWAL:', { userId, amount, emailOrPhone });
+  if (!userId || !amount || parseFloat(amount) <= 0 || !emailOrPhone || !paymentMethodId) {
+    return res.status(400).json({ success: false, error: 'Paramètres invalides' });
+  }
 
   try {
     const token = await getEziPayToken();
-
-    const userDoc = await db.collection('users').doc(userId).get();
+    const userRef = db.collection('users').doc(userId);
+    const userDoc = await userRef.get();
     const balance = userDoc.data()?.balance || 0;
-    const fees = amount * 0.06;
-    const totalDebit = amount + fees;
+    const fees = parseFloat(amount) * 0.06;
+    const totalDebit = parseFloat(amount) + fees;
 
     if (balance < totalDebit) {
       return res.json({ success: false, error: 'Solde insuffisant' });
@@ -160,31 +165,30 @@ app.post('/api/create-withdrawal', async (req, res) => {
     );
 
     const newBalance = balance - totalDebit;
-    await db.collection('users').doc(userId).update({ balance: newBalance });
+    await userRef.update({ balance: newBalance });
 
-    await db.collection('users').doc(userId).collection('transactions').add({
+    await userRef.collection('transactions').add({
       type: 'withdrawal',
-      amount: amount,
-      fees: fees,
-      totalDebit: totalDebit,
+      amount: parseFloat(amount),
+      fees,
+      totalDebit,
       status: 'completed',
-      emailOrPhone: emailOrPhone,
+      emailOrPhone,
       date: admin.firestore.FieldValue.serverTimestamp()
     });
 
-    console.log('✅ Retrait effectué');
-
-    res.json({ success: true, totalDebit: totalDebit, newBalance: newBalance });
+    res.json({ success: true, totalDebit, newBalance });
   } catch (error) {
-    console.error('❌ Erreur withdrawal:', error.response?.data || error.message);
+    console.error('❌ create-withdrawal error:', error.response?.data || error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// ===== HEALTH =====
+// HEALTH
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
+// ===== LANCER SERVEUR =====
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Serveur port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Serveur démarré sur le port ${PORT}`));
