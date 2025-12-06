@@ -48,33 +48,18 @@ app.post('/api/create-deposit', async (req, res) => {
       {
         amount: Math.round(amount * 100) / 100,
         currency: currency || 'USD',
+        // CORRECTION : Pas de paramètres, EziPay les ajoutera automatiquement
         successUrl: `https://chanpyon509.com/ezipay-paiement.html`,
-        cancelUrl: `https://chanpyon509.com/ezipay-paiement.html?cancel=true`,
+        cancelUrl: `https://chanpyon509.com/ezipay-paiement.html`,
         metadata: `Dépôt wallet ${userId}`
       },
       {
         headers: { Authorization: `Bearer ${token}` }
       }
     );
-    console.log('📥 RÉPONSE EZIPAY:', JSON.stringify(response.data));
-    console.log('🔗 PAYMENT_URL:', response.data.data.payment_url);
 
     const fees = amount * 0.06;
     const creditAmount = amount - fees;
-
-    // Sauvegarder en attente avec grant_id
-    await db
-      .collection('users')
-      .doc(userId)
-      .collection('pending_deposits')
-      .add({
-        grantId: response.data.data.grant_id,
-        amount: amount,
-        creditAmount: creditAmount,
-        fees: fees,
-        status: 'pending',
-        createdAt: admin.firestore.FieldValue.serverTimestamp()
-      });
 
     res.json({
       success: true,
@@ -92,14 +77,12 @@ app.post('/api/create-deposit', async (req, res) => {
 });
 
 // ===== VÉRIFIER DÉPÔT =====
-// CHANGEMENT ICI : Utilise transactionId (pas grantId) pour vérifier avec EziPay
 app.post('/api/verify-deposit', async (req, res) => {
   const { transactionId, userId } = req.body;
 
   try {
     const token = await getEziPayToken();
 
-    // Vérifier avec transaction_id auprès d'EziPay
     const response = await axios.get(
       `${EZIPAY_BASE_URL}/transaction/get/${transactionId}`,
       {
@@ -115,14 +98,12 @@ app.post('/api/verify-deposit', async (req, res) => {
     const fees = amount * 0.06;
     const creditAmount = amount - fees;
 
-    // Créditer l'utilisateur
     const userRef = db.collection('users').doc(userId);
     const userDoc = await userRef.get();
     const newBalance = (userDoc.data()?.balance || 0) + creditAmount;
 
     await userRef.update({ balance: newBalance });
 
-    // Enregistrer transaction
     await userRef.collection('transactions').add({
       type: 'deposit',
       amount: amount,
@@ -136,14 +117,7 @@ app.post('/api/verify-deposit', async (req, res) => {
     res.json({
       success: true,
       creditAmount: creditAmount,
-      newBalance: newBalance,
-      transaction: {
-        type: 'deposit',
-        amount: amount,
-        creditAmount: creditAmount,
-        status: 'completed',
-        date: new Date().toISOString()
-      }
+      newBalance: newBalance
     });
   } catch (error) {
     console.error('❌ Erreur verify-deposit:', error.response?.data || error.message);
@@ -161,7 +135,6 @@ app.post('/api/create-withdrawal', async (req, res) => {
   try {
     const token = await getEziPayToken();
 
-    // Vérifier solde
     const userDoc = await db.collection('users').doc(userId).get();
     const balance = userDoc.data()?.balance || 0;
     const fees = amount * 0.06;
@@ -171,7 +144,6 @@ app.post('/api/create-withdrawal', async (req, res) => {
       return res.json({ success: false, error: 'Solde insuffisant' });
     }
 
-    // Créer send-money
     const response = await axios.post(
       `${EZIPAY_BASE_URL}/send-money/create`,
       {
@@ -185,13 +157,11 @@ app.post('/api/create-withdrawal', async (req, res) => {
       }
     );
 
-    // Débiter
     const newBalance = balance - totalDebit;
     await db.collection('users').doc(userId).update({
       balance: newBalance
     });
 
-    // Enregistrer transaction
     await db.collection('users').doc(userId).collection('transactions').add({
       type: 'withdrawal',
       amount: amount,
@@ -206,14 +176,7 @@ app.post('/api/create-withdrawal', async (req, res) => {
     res.json({
       success: true,
       totalDebit: totalDebit,
-      newBalance: newBalance,
-      transaction: {
-        type: 'withdrawal',
-        amount: amount,
-        totalDebit: totalDebit,
-        status: 'processing',
-        date: new Date().toISOString()
-      }
+      newBalance: newBalance
     });
   } catch (error) {
     console.error('❌ Erreur create-withdrawal:', error.response?.data || error.message);
