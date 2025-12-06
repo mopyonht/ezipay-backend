@@ -48,8 +48,8 @@ app.post('/api/create-deposit', async (req, res) => {
       {
         amount: Math.round(amount * 100) / 100,
         currency: currency || 'USD',
-        successUrl: `https://chanpyon509.com/ezipay-paiement.html?deposit=success`,
-        cancelUrl: `https://chanpyon509.com/ezipay-paiement.html?deposit=cancel`,
+        successUrl: `https://chanpyon509.com/ezipay-paiement.html`,
+        cancelUrl: `https://chanpyon509.com/ezipay-paiement.html?cancel=true`,
         metadata: `Dépôt wallet ${userId}`
       },
       {
