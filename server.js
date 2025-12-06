@@ -24,7 +24,7 @@ const db = admin.firestore();
 const EZIPAY_CLIENT_ID = process.env.EZIPAY_CLIENT_ID;
 const EZIPAY_CLIENT_SECRET = process.env.EZIPAY_CLIENT_SECRET;
 const EZIPAY_BASE_URL = 'https://ezipaywallet.com/merchant/api';
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
+const FRONTEND_URL = 'https://chanpyon509.com';
 
 // ===== OBTENIR TOKEN EZIPAY =====
 async function getEziPayToken() {
@@ -35,21 +35,22 @@ async function getEziPayToken() {
     });
     return response.data.data.access_token;
   } catch (error) {
-    console.error('❌ Erreur getEziPayToken:', error.response?.data || error.message);
-    throw new Error('Impossible d’obtenir le token EziPay');
+    console.error('❌ Erreur token:', error.response?.data || error.message);
+    throw new Error('Impossible d\'obtenir le token EziPay');
   }
 }
 
 // ===== ROUTES =====
 
-// SERVIR EZIPAY-PAIEMENT.HTML
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'ezipay-paiement.html'));
 });
 
-// CREATE DEPOSIT
+// ===== CREATE DEPOSIT (VALIDATION MANUELLE) =====
 app.post('/api/create-deposit', async (req, res) => {
   const { userId, amount, currency } = req.body;
+
+  console.log('📥 CREATE DEPOSIT:', { userId, amount, currency });
 
   if (!userId || !amount || parseFloat(amount) <= 0) {
     return res.status(400).json({ success: false, error: 'Paramètres invalides' });
@@ -63,20 +64,30 @@ app.post('/api/create-deposit', async (req, res) => {
       {
         amount: parseFloat(amount),
         currency: currency || 'USD',
-        successUrl: `${FRONTEND_URL}/ezipay-paiement.html`,
+        successUrl: `${FRONTEND_URL}/ezipay-paiement.html?deposit=success`,
         cancelUrl: `${FRONTEND_URL}/ezipay-paiement.html`,
-        metadata: JSON.stringify({ userId, amount, type: 'deposit' })
+        metadata: JSON.stringify({ userId, amount })
       },
       { headers: { Authorization: `Bearer ${token}` } }
     );
 
-    const fees = parseFloat(amount) * 0.06;
-    const creditAmount = parseFloat(amount) - fees;
+    console.log('✅ EziPay response:', ezipayResponse.data);
+
+    // ✅ SAUVEGARDER DEMANDE POUR VALIDATION MANUELLE
+    await db.collection('pending_deposits').add({
+      userId: userId,
+      amount: parseFloat(amount),
+      currency: currency || 'USD',
+      grantId: ezipayResponse.data.data.grant_id,
+      status: 'pending_payment',
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    console.log('✅ Demande sauvegardée dans pending_deposits');
 
     res.json({
       success: true,
-      payment_url: ezipayResponse.data.data.payment_url,
-      expectedCredit: creditAmount
+      payment_url: ezipayResponse.data.data.payment_url
     });
   } catch (error) {
     console.error('❌ create-deposit error:', error.response?.data || error.message);
@@ -84,58 +95,11 @@ app.post('/api/create-deposit', async (req, res) => {
   }
 });
 
-// VERIFY DEPOSIT
-app.post('/api/verify-deposit', async (req, res) => {
-  const { transactionId, userId } = req.body;
-
-  if (!transactionId || !userId) {
-    return res.status(400).json({ success: false, error: 'Paramètres invalides' });
-  }
-
-  try {
-    const token = await getEziPayToken();
-
-    const ezipayResponse = await axios.get(
-      `${EZIPAY_BASE_URL}/transaction/get/${transactionId}`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-
-    const status = ezipayResponse.data.data.status;
-    if (status !== 'Success') {
-      return res.json({ success: false, error: 'Paiement non confirmé' });
-    }
-
-    const amount = parseFloat(ezipayResponse.data.data.amount);
-    const fees = amount * 0.06;
-    const creditAmount = amount - fees;
-
-    // Mettre à jour Firebase
-    const userRef = db.collection('users').doc(userId);
-    const userDoc = await userRef.get();
-    const currentBalance = userDoc.data()?.balance || 0;
-    const newBalance = currentBalance + creditAmount;
-
-    await userRef.set({ balance: newBalance }, { merge: true });
-    await userRef.collection('transactions').add({
-      type: 'deposit',
-      amount,
-      creditAmount,
-      fees,
-      status: 'completed',
-      transactionId,
-      date: admin.firestore.FieldValue.serverTimestamp()
-    });
-
-    res.json({ success: true, creditAmount, newBalance });
-  } catch (error) {
-    console.error('❌ verify-deposit error:', error.response?.data || error.message);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// CREATE WITHDRAWAL
+// ===== CREATE WITHDRAWAL =====
 app.post('/api/create-withdrawal', async (req, res) => {
   const { userId, amount, currency, emailOrPhone, paymentMethodId } = req.body;
+
+  console.log('💸 CREATE WITHDRAWAL:', { userId, amount, emailOrPhone });
 
   if (!userId || !amount || parseFloat(amount) <= 0 || !emailOrPhone || !paymentMethodId) {
     return res.status(400).json({ success: false, error: 'Paramètres invalides' });
@@ -177,18 +141,19 @@ app.post('/api/create-withdrawal', async (req, res) => {
       date: admin.firestore.FieldValue.serverTimestamp()
     });
 
+    console.log('✅ Retrait effectué');
+
     res.json({ success: true, totalDebit, newBalance });
   } catch (error) {
-    console.error('❌ create-withdrawal error:', error.response?.data || error.message);
+    console.error('❌ withdrawal error:', error.response?.data || error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// HEALTH
+// ===== HEALTH =====
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
-// ===== LANCER SERVEUR =====
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Serveur démarré sur le port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Serveur sur port ${PORT}`));
